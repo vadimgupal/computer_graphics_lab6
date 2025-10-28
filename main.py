@@ -264,6 +264,52 @@ def tetrahedron():
     ]
     return Polyhedron(V, F)
 
+def hexahedron():
+    """Правильный гексаэдр (куб) с центром в начале координат и ребром 2."""
+    V = [
+        (-1, -1, -1),  # 0
+        ( 1, -1, -1),  # 1
+        ( 1,  1, -1),  # 2
+        (-1,  1, -1),  # 3
+        (-1, -1,  1),  # 4
+        ( 1, -1,  1),  # 5
+        ( 1,  1,  1),  # 6
+        (-1,  1,  1),  # 7
+    ]
+    # 6 квадратных граней (порядок вершин по контуру)
+    F = [
+        [0, 1, 2, 3],  # z = -1 (низ)
+        [4, 5, 6, 7],  # z = +1 (верх)
+        [0, 1, 5, 4],  # y = -1
+        [1, 2, 6, 5],  # x = +1
+        [2, 3, 7, 6],  # y = +1
+        [3, 0, 4, 7],  # x = -1
+    ]
+    return Polyhedron(V, F)
+
+def octahedron():
+    """Правильный октаэдр с центром в начале координат и ребром √2."""
+    V = [
+        ( 1,  0,  0),  # 0
+        (-1,  0,  0),  # 1
+        ( 0,  1,  0),  # 2
+        ( 0, -1,  0),  # 3
+        ( 0,  0,  1),  # 4 (верх)
+        ( 0,  0, -1),  # 5 (низ)
+    ]
+    # 8 треугольных граней
+    F = [
+        [4, 0, 2],
+        [4, 2, 1],
+        [4, 1, 3],
+        [4, 3, 0],
+        [5, 2, 0],
+        [5, 1, 2],
+        [5, 3, 1],
+        [5, 0, 3],
+    ]
+    return Polyhedron(V, F)
+
 def icosahedron():
     """Создает правильный икосаэдр."""
     phi = (1 + 5 ** 0.5) / 2  # золотое сечение
@@ -340,24 +386,39 @@ def wireframe_2d(ax, P: Polyhedron, proj='perspective', f=1.5):
     ax.grid(True)
 
 def demo():
-    """Демонстрационная функция - создает и отображает три многогранника."""
-    TET = tetrahedron().scale_about_center(1.0).translate(-2.5, 0, 7)
-    ICO = icosahedron().scale_about_center(0.9).rotate_around_axis_through_center('x', 20).translate(0, 0, 7)
-    DOD = dodecahedron().scale_about_center(0.9).rotate_around_axis_through_center('z', 30).translate(2.5, 0, 7)
+    """Демонстрационная функция — отображает 5 правильных многогранников."""
+    TET = tetrahedron().scale_about_center(1.0).translate(-3.0,  1.2, 7)
+    CUB = hexahedron().scale_about_center(0.9).rotate_around_axis_through_center('z', 30).translate(0.0,  1.2, 7)
+    OCT = octahedron().scale_about_center(1.1).rotate_around_axis_through_center('x', 25).translate(3.0,  1.2, 7)
 
-    fig = plt.figure(figsize=(12,4))
+    ICO = icosahedron().scale_about_center(0.9).rotate_around_axis_through_center('x', 20).translate(-1.5, -1.2, 7)
+    DOD = dodecahedron().scale_about_center(0.9).rotate_around_axis_through_center('z', 30).translate(1.5, -1.2, 7)
 
-    ax1 = fig.add_subplot(1,3,1)
+    fig = plt.figure(figsize=(12, 8))
+
+    ax1 = fig.add_subplot(2,3,1)
     wireframe_2d(ax1, TET, proj='perspective', f=2.0)
     ax1.set_title('Тетраэдр — перспективная')
 
-    ax2 = fig.add_subplot(1,3,2)
-    wireframe_2d(ax2, ICO, proj='axonometric')
-    ax2.set_title('Икосаэдр — аксонометрическая')
+    ax2 = fig.add_subplot(2,3,2)
+    wireframe_2d(ax2, CUB, proj='axonometric')  # куб в изометрии красиво читается
+    ax2.set_title('Гексаэдр (куб) — аксонометрическая')
 
-    ax3 = fig.add_subplot(1,3,3)
-    wireframe_2d(ax3, DOD, proj='perspective', f=2.0)
-    ax3.set_title('Додекаэдр — перспективная')
+    ax3 = fig.add_subplot(2,3,3)
+    wireframe_2d(ax3, OCT, proj='perspective', f=2.0)
+    ax3.set_title('Октаэдр — перспективная')
+
+    ax4 = fig.add_subplot(2,3,4)
+    wireframe_2d(ax4, ICO, proj='axonometric')
+    ax4.set_title('Икосаэдр — аксонометрическая')
+
+    ax5 = fig.add_subplot(2,3,5)
+    wireframe_2d(ax5, DOD, proj='perspective', f=2.0)
+    ax5.set_title('Додекаэдр — перспективная')
+
+    # Пустую шестую ячейку можно скрыть
+    ax6 = fig.add_subplot(2,3,6)
+    ax6.axis('off')
 
     fig.tight_layout()
     plt.show()
