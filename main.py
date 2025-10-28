@@ -77,7 +77,8 @@ def reflect(plane: str):
     raise ValueError("Плоскость должна быть: 'xy', 'yz', 'xz'")
 
 def rodrigues_axis_angle(axis, angle_deg):
-    """Поворот 3x3 (формула Родрига) вокруг единичной оси на угол в градусах."""
+    """Поворот 3x3 вокруг единичной оси на угол в градусах."""
+    axis = normalize(np.asarray(axis, dtype=float))
     a = radians(angle_deg)
     c, s = cos(a), sin(a)
     K = np.array([[0, -axis[2], axis[1]],
@@ -182,9 +183,8 @@ class Polyhedron:
         return self.apply(S(sx, sy, sz))
 
     def scale_about_center(self, s):
-        """Масштабирование относительно центра."""
         c = self.center()
-        return self.apply(T(*c) @ S(s, s, s) @ T(*(-c)))
+        return self.apply(T(*(-c)) @ S(s, s, s) @ T(*c))
 
     def rotate_x(self, angle_deg):
         """Поворот вокруг оси X."""
@@ -203,12 +203,10 @@ class Polyhedron:
         return self.apply(reflect(plane))
 
     def rotate_around_axis_through_center(self, axis: str, angle_deg):
-        """Поворот вокруг оси, проходящей через центр."""
         axis = axis.lower()
         c = self.center()
         R = {'x': Rx, 'y': Ry, 'z': Rz}[axis](angle_deg)
-        # Правильный порядок: перенос в центр -> поворот -> возврат: T(c) @ R @ T(-c)
-        return self.apply(T(*c) @ R @ T(*(-c)))
+        return self.apply(T(*(-c)) @ R @ T(*c))
 
     def rotate_around_line(self, p1, p2, angle_deg):
         """Поворот вокруг произвольной линии."""
@@ -311,58 +309,106 @@ def octahedron():
     return Polyhedron(V, F)
 
 def icosahedron():
-    """Создает правильный икосаэдр."""
-    phi = (1 + 5 ** 0.5) / 2  # золотое сечение
-    a, b = 1.0, phi
+    """Икосаэдр, построенный с цилиндра.
+    Полюса: (0,0,±sqrt(5)/2); кольца радиуса 1 на z=±1/2, нижнее смещено на 36°.
+    Возвращает Polyhedron с явными 20 треугольными гранями.
+    """
+    def deg(a): return np.deg2rad(a)
+
+    z_top, z_bot = +0.5, -0.5
+    r = 1.0
+    z_pole = np.sqrt(5.0) / 2.0
+
     V = []
-    for x in (-a, a):
-        for y in (-b, b):
-            V.append((x, y, 0))
-            V.append((0, x, y))
-            V.append((y, 0, x))
-    # Удаляем дубликаты
-    V_unique = []
-    for p in V:
-        if not any(np.allclose(p, q) for q in V_unique):
-            V_unique.append(p)
-    V = V_unique
-    # Строим грани через поиск треугольников с равными ребрами
-    pts = np.array(V)
-    n = len(pts)
-    dists = {}
-    for i in range(n):
-        for j in range(i+1, n):
-            dists[(i,j)] = np.linalg.norm(pts[i]-pts[j])
-    edges_sorted = sorted(dists.items(), key=lambda kv: kv[1])
-    E = set(k for k,_ in edges_sorted[:30])
-    F = set()
-    for i in range(n):
-        for j in range(i+1, n):
-            if (i,j) not in E: continue
-            for k in range(j+1, n):
-                if (i,k) in E and (j,k) in E:
-                    F.add(tuple([i,j,k]))
-    return Polyhedron([tuple(p) for p in pts], [list(f) for f in sorted(F)])
+    # верхняя вершина
+    V.append((0.0, 0.0, +z_pole))
+
+    # 1..5 — верхнее кольцо (углы 0,72,144,216,288)
+    for k in range(5):
+        ang = deg(72*k)
+        V.append((r*np.cos(ang), r*np.sin(ang), z_top))
+
+    # 6..10 — нижнее кольцо (углы 36,108,180,252,324)
+    for k in range(5):
+        ang = deg(36 + 72*k)
+        V.append((r*np.cos(ang), r*np.sin(ang), z_bot))
+
+    # нижняя вершина
+    V.append((0.0, 0.0, -z_pole))
+
+    F = []
+
+    # Верхняя «шапка»: 5 треугольников (0, Ti, Ti+1)
+    for i in range(5):
+        F.append([0, 1+i, 1+((i+1) % 5)])
+
+    # Средняя зона: 10 треугольников (по 2 на «сектор»).
+    # Важный момент: у вершины верхнего кольца Ti ближайшие нижние — Bi и B(i-1).
+    for i in range(5):
+        Ti   = 1 + i
+        Tip1 = 1 + ((i+1) % 5)
+        Bi   = 6 + i
+        Bim1 = 6 + ((i-1) % 5)
+
+        # «верхний» из пары (Ti, Bi, B(i-1))
+        F.append([Ti, Bi, Bim1])
+        # «нижний» из пары (Bi, Tip1, Ti)
+        F.append([Bi, Tip1, Ti])
+
+    # Нижняя «шапка»: 5 треугольников (11, Bj+1, Bj)
+    for j in range(5):
+        Bj   = 6 + j
+        Bjp1 = 6 + ((j+1) % 5)
+        F.append([11, Bjp1, Bj])
+
+    return Polyhedron(V, F)
+
 
 def dodecahedron():
-    """Создает правильный додекаэдр."""
-    phi = (1 + 5 ** 0.5) / 2  # золотое сечение
-    b = 1.0/phi
-    c = phi
-    V = []
-    # (±1, ±1, ±1)
-    for x in (-1.0, 1.0):
-        for y in (-1.0, 1.0):
-            for z in (-1.0, 1.0):
-                V.append((x,y,z))
-    # (0, ±1/φ, ±φ) и перестановки
-    for sx in (1.0,-1.0):
-        for sy in (1.0,-1.0):
-            V.append((0.0, sx*b, sy*c))
-            V.append((sx*b, sy*c, 0.0))
-            V.append((sx*c, 0.0, sy*b))
-    # Грани - 12 пятиугольников; для простоты используем ребра ближайших соседей
-    return Polyhedron(V, [])
+    """Додекаэдр как дуал к идущему выше 'цилиндрическому' икосаэдру:
+    вершины = центры тяжести треугольных граней икосаэдра,
+    грани = пятиугольники, по одному на каждую вершину икосаэдра.
+    """
+    I = icosahedron()
+    # координаты вершин икосаэдра (N x 3)
+    V = (I.V[:3, :] / I.V[3, :]).T #normalization
+    faces_I = [f.indices for f in I.faces]  # список где каждый элемент это список индексов точек грани
+
+    # 20 вершин додекаэдра: центроиды треугольников
+    D_vertices = [tuple(np.mean(V[idxs], axis=0)) for idxs in faces_I]
+
+    # каждой вершине икосаэдра ставим в соответствие номера граней в которых она используется
+    incident = [[] for _ in range(len(V))]
+    for fi, tri in enumerate(faces_I):
+        for vid in tri:
+            incident[vid].append(fi)
+
+    # Построим 12 пятиугольных граней додекаэдра.
+    D_faces = []
+    for vid, fids in enumerate(incident):
+        if len(fids) != 5:
+            # на всякий случай пропустим аномалии (их быть не должно)
+            continue
+        p = V[vid]              # точка-центр «звезды» (вершины икосаэдра)
+        n = normalize(p)        # используем направление p как «нормаль» локальной плоскости
+        # ортонормированный базис {e1,e2} в плоскости, перпендикулярной n
+        tmp = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        e1 = normalize(np.cross(n, tmp))
+        e2 = np.cross(n, e1)
+
+        # отсортируем прилегающие центроиды по углу в этой плоскости
+        ang_with_id = []
+        for fid in fids:
+            c = np.mean(V[faces_I[fid]], axis=0)
+            d = c - p
+            ang = np.arctan2(np.dot(d, e2), np.dot(d, e1))
+            ang_with_id.append((ang, fid))
+        ang_with_id.sort()#массив отсортированных по полярному углу точек, чтобы точки брались по кругу
+
+        D_faces.append([fid for ang, fid in ang_with_id]) #добавляем грань
+
+    return Polyhedron(D_vertices, D_faces)
+
 
 # --------------------
 # Вспомогательные функции для визуализации (2D каркас после проекции)
