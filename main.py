@@ -1,6 +1,7 @@
 import numpy as np
 from math import cos, sin, radians
-import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import ttk
 
 def to_h(point3):
     """Возвращает однородный 4x1 вектор из 3D точки (x, y, z)."""
@@ -77,7 +78,6 @@ def reflect(plane: str):
 
 def rodrigues_axis_angle(axis, angle_deg):
     """Поворот 3x3 (формула Родрига) вокруг единичной оси на угол в градусах."""
-    axis = normalize(np.asarray(axis, dtype=float))
     a = radians(angle_deg)
     c, s = cos(a), sin(a)
     K = np.array([[0, -axis[2], axis[1]],
@@ -94,7 +94,6 @@ def R_around_line(p1, p2, angle_deg):
     R3 = rodrigues_axis_angle(axis, angle_deg)  # 3x3
     M = np.eye(4)
     M[:3,:3] = R3
-    # Сэндвич-преобразование для поворота вокруг линии, проходящей через p1
     return T(*p1) @ M @ T(*(-p1))
 
 # --------------------
@@ -185,7 +184,7 @@ class Polyhedron:
     def scale_about_center(self, s):
         """Масштабирование относительно центра."""
         c = self.center()
-        return self.apply(T(*(-c)) @ S(s, s, s) @ T(*c))
+        return self.apply(T(*c) @ S(s, s, s) @ T(*(-c)))
 
     def rotate_x(self, angle_deg):
         """Поворот вокруг оси X."""
@@ -208,7 +207,8 @@ class Polyhedron:
         axis = axis.lower()
         c = self.center()
         R = {'x': Rx, 'y': Ry, 'z': Rz}[axis](angle_deg)
-        return self.apply(T(*(-c)) @ R @ T(*c))
+        # Правильный порядок: перенос в центр -> поворот -> возврат: T(c) @ R @ T(-c)
+        return self.apply(T(*c) @ R @ T(*(-c)))
 
     def rotate_around_line(self, p1, p2, angle_deg):
         """Поворот вокруг произвольной линии."""
@@ -368,60 +368,277 @@ def dodecahedron():
 # Вспомогательные функции для визуализации (2D каркас после проекции)
 # --------------------
 
-def wireframe_2d(ax, P: Polyhedron, proj='perspective', f=1.5):
-    """Отрисовывает многогранник в 2D после проекции."""
-    if proj == 'perspective':
+# --------------------
+# Tkinter-приложение для отображения каркаса
+# --------------------
+
+POLY_BUILDERS = {
+    'Тетраэдр': tetrahedron,
+    'Гексаэдр (куб)': hexahedron,
+    'Октаэдр': octahedron,
+    'Икосаэдр': icosahedron,
+    'Додекаэдр': dodecahedron,
+}
+
+def make_poly(name: str) -> Polyhedron:
+    """Создаёт выбранный многогранник без дополнительных поворотов/масштабов."""
+    builder = POLY_BUILDERS.get(name)
+    if builder is None:
+        builder = hexahedron
+    return builder()
+
+def project_points(P: Polyhedron, proj_mode: str, f: float = 1.8):
+    """Возвращает 2D проекцию вершин и список рёбер.
+
+    proj_mode: 'perspective' или 'axonometric'/'isometric'
+    """
+    Q = P.copy()
+    if proj_mode == 'perspective':
+        # Стандартная перспектива: камера в начале координат, смотрит вдоль +Z; сместим модель на z=5
+        Q = Q.translate(0, 0, 5.0)
         M = perspective(f)
-    elif proj == 'axonometric' or proj == 'isometric':
-        M = isometric_projection_matrix()
     else:
-        raise ValueError("proj должна быть 'perspective' или 'axonometric'")
-    x, y = P.projected(M)
-    # рисуем ребра
-    for a,b in P.edges():
-        ax.plot([x[a], x[b]], [y[a], y[b]])
-    ax.set_aspect('equal', 'box')
-    ax.set_xlabel('x')
-    ax.set_ylabel('y')
-    ax.grid(True)
+        # Стандартная изометрическая (аксонометрическая) матрица
+        M = isometric_projection_matrix()
+    x, y = Q.projected(M)
+    edges = Q.edges()
+    return (x, y, edges)
 
-def demo():
-    """Демонстрационная функция — отображает 5 правильных многогранников."""
-    TET = tetrahedron().scale_about_center(1.0).translate(-3.0,  1.2, 7)
-    CUB = hexahedron().scale_about_center(0.9).rotate_around_axis_through_center('z', 30).translate(0.0,  1.2, 7)
-    OCT = octahedron().scale_about_center(1.1).rotate_around_axis_through_center('x', 25).translate(3.0,  1.2, 7)
+def to_pixels(x, y, width, height, scale=120.0):
+    """Перевод модельных координат в пиксели с фиксированным масштабом и центрированием."""
+    x = np.asarray(x)
+    y = np.asarray(y)
+    cx = width * 0.5
+    cy = height * 0.5
+    Xs = cx + scale * x
+    Ys = cy - scale * y  # переворот оси Y
+    return Xs, Ys
 
-    ICO = icosahedron().scale_about_center(0.9).rotate_around_axis_through_center('x', 20).translate(-1.5, -1.2, 7)
-    DOD = dodecahedron().scale_about_center(0.9).rotate_around_axis_through_center('z', 30).translate(1.5, -1.2, 7)
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title('Правильные многогранники — Tkinter')
 
-    fig = plt.figure(figsize=(12, 8))
+        self.poly_var = tk.StringVar(value='Гексаэдр (куб)')
+        self.proj_var = tk.StringVar(value='perspective')  # 'perspective' | 'isometric'
+        # Текущая модель многогранника
+        self.model: Polyhedron = make_poly(self.poly_var.get())
 
-    ax1 = fig.add_subplot(2,3,1)
-    wireframe_2d(ax1, TET, proj='perspective', f=2.0)
-    ax1.set_title('Тетраэдр — перспективная')
+        top = ttk.Frame(root)
+        top.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
 
-    ax2 = fig.add_subplot(2,3,2)
-    wireframe_2d(ax2, CUB, proj='axonometric')  # куб в изометрии красиво читается
-    ax2.set_title('Гексаэдр (куб) — аксонометрическая')
+        ttk.Label(top, text='Многогранник:').pack(side=tk.LEFT)
+        self.poly_box = ttk.Combobox(
+            top,
+            textvariable=self.poly_var,
+            values=list(POLY_BUILDERS.keys()),
+            state='readonly',
+            width=18,
+        )
+        self.poly_box.pack(side=tk.LEFT, padx=(6, 12))
+        self.poly_box.bind('<<ComboboxSelected>>', lambda e: self.rebuild_model())
 
-    ax3 = fig.add_subplot(2,3,3)
-    wireframe_2d(ax3, OCT, proj='perspective', f=2.0)
-    ax3.set_title('Октаэдр — перспективная')
+        ttk.Label(top, text='Проекция:').pack(side=tk.LEFT)
+        self.rb_persp = ttk.Radiobutton(
+            top, text='Перспективная', value='perspective', variable=self.proj_var,
+            command=self.redraw
+        )
+        self.rb_iso = ttk.Radiobutton(
+            top, text='Аксонометрическая', value='isometric', variable=self.proj_var,
+            command=self.redraw
+        )
+        self.rb_persp.pack(side=tk.LEFT, padx=(6, 6))
+        self.rb_iso.pack(side=tk.LEFT)
 
-    ax4 = fig.add_subplot(2,3,4)
-    wireframe_2d(ax4, ICO, proj='axonometric')
-    ax4.set_title('Икосаэдр — аксонометрическая')
+        ttk.Button(top, text='Сброс', command=self.rebuild_model).pack(side=tk.RIGHT)
 
-    ax5 = fig.add_subplot(2,3,5)
-    wireframe_2d(ax5, DOD, proj='perspective', f=2.0)
-    ax5.set_title('Додекаэдр — перспективная')
+        # Панель преобразований
+        controls = ttk.LabelFrame(root, text='Преобразования')
+        controls.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0,8))
 
-    # Пустую шестую ячейку можно скрыть
-    ax6 = fig.add_subplot(2,3,6)
-    ax6.axis('off')
+        # Смещение
+        trf1 = ttk.Frame(controls)
+        trf1.pack(side=tk.TOP, fill=tk.X, pady=4)
+        ttk.Label(trf1, text='Смещение: dx').pack(side=tk.LEFT)
+        self.dx_entry = ttk.Entry(trf1, width=6)
+        self.dx_entry.insert(0, '0')
+        self.dx_entry.pack(side=tk.LEFT, padx=(4,8))
+        ttk.Label(trf1, text='dy').pack(side=tk.LEFT)
+        self.dy_entry = ttk.Entry(trf1, width=6)
+        self.dy_entry.insert(0, '0')
+        self.dy_entry.pack(side=tk.LEFT, padx=(4,8))
+        ttk.Label(trf1, text='dz').pack(side=tk.LEFT)
+        self.dz_entry = ttk.Entry(trf1, width=6)
+        self.dz_entry.insert(0, '0')
+        self.dz_entry.pack(side=tk.LEFT, padx=(4,8))
+        ttk.Button(trf1, text='Применить', command=self.apply_translate).pack(side=tk.LEFT, padx=6)
 
-    fig.tight_layout()
-    plt.show()
+        # Поворот
+        trf2 = ttk.Frame(controls)
+        trf2.pack(side=tk.TOP, fill=tk.X, pady=4)
+        ttk.Label(trf2, text='Поворот: ось').pack(side=tk.LEFT)
+        self.rot_axis_var = tk.StringVar(value='x')
+        self.rot_axis = ttk.Combobox(trf2, textvariable=self.rot_axis_var, values=['x','y','z'], state='readonly', width=4)
+        self.rot_axis.pack(side=tk.LEFT, padx=(4,8))
+        ttk.Label(trf2, text='угол (°)').pack(side=tk.LEFT)
+        self.angle_entry = ttk.Entry(trf2, width=8)
+        self.angle_entry.insert(0, '30')
+        self.angle_entry.pack(side=tk.LEFT, padx=(4,8))
+        ttk.Button(trf2, text='Повернуть', command=self.apply_rotate).pack(side=tk.LEFT, padx=6)
+        ttk.Button(trf2, text='Повернуть (через центр)', command=self.apply_rotate_center).pack(side=tk.LEFT, padx=6)
+
+        # Масштаб
+        trf3 = ttk.Frame(controls)
+        trf3.pack(side=tk.TOP, fill=tk.X, pady=4)
+        ttk.Label(trf3, text='Масштаб: sx').pack(side=tk.LEFT)
+        self.sx_entry = ttk.Entry(trf3, width=6)
+        self.sx_entry.insert(0, '1')
+        self.sx_entry.pack(side=tk.LEFT, padx=(4,8))
+        ttk.Label(trf3, text='sy').pack(side=tk.LEFT)
+        self.sy_entry = ttk.Entry(trf3, width=6)
+        self.sy_entry.insert(0, '1')
+        self.sy_entry.pack(side=tk.LEFT, padx=(4,8))
+        ttk.Label(trf3, text='sz').pack(side=tk.LEFT)
+        self.sz_entry = ttk.Entry(trf3, width=6)
+        self.sz_entry.insert(0, '1')
+        self.sz_entry.pack(side=tk.LEFT, padx=(4,8))
+        ttk.Button(trf3, text='Масштаб', command=self.apply_scale).pack(side=tk.LEFT, padx=6)
+
+        # Равномерный масштаб вокруг центра (одно число)
+        ttk.Label(trf3, text=' s').pack(side=tk.LEFT, padx=(12,2))
+        self.s_uniform_entry = ttk.Entry(trf3, width=6)
+        self.s_uniform_entry.insert(0, '1')
+        self.s_uniform_entry.pack(side=tk.LEFT, padx=(2,6))
+        ttk.Button(trf3, text='Масштаб (через центр)', command=self.apply_scale_center).pack(side=tk.LEFT, padx=6)
+
+        # Вращение вокруг произвольной прямой (p1 -> p2)
+        trf5 = ttk.Frame(controls)
+        trf5.pack(side=tk.TOP, fill=tk.X, pady=4)
+        ttk.Label(trf5, text='Поворот вокруг прямой:').pack(side=tk.LEFT)
+        ttk.Label(trf5, text='p1(x,y,z)').pack(side=tk.LEFT, padx=(8,2))
+        self.p1x_entry = ttk.Entry(trf5, width=5); self.p1x_entry.insert(0,'0'); self.p1x_entry.pack(side=tk.LEFT)
+        self.p1y_entry = ttk.Entry(trf5, width=5); self.p1y_entry.insert(0,'0'); self.p1y_entry.pack(side=tk.LEFT)
+        self.p1z_entry = ttk.Entry(trf5, width=5); self.p1z_entry.insert(0,'0'); self.p1z_entry.pack(side=tk.LEFT)
+        ttk.Label(trf5, text='p2(x,y,z)').pack(side=tk.LEFT, padx=(8,2))
+        self.p2x_entry = ttk.Entry(trf5, width=5); self.p2x_entry.insert(0,'0'); self.p2x_entry.pack(side=tk.LEFT)
+        self.p2y_entry = ttk.Entry(trf5, width=5); self.p2y_entry.insert(0,'1'); self.p2y_entry.pack(side=tk.LEFT)
+        self.p2z_entry = ttk.Entry(trf5, width=5); self.p2z_entry.insert(0,'0'); self.p2z_entry.pack(side=tk.LEFT)
+        ttk.Label(trf5, text='угол (°)').pack(side=tk.LEFT, padx=(8,2))
+        self.angle_line_entry = ttk.Entry(trf5, width=7); self.angle_line_entry.insert(0,'30'); self.angle_line_entry.pack(side=tk.LEFT)
+        ttk.Button(trf5, text='Повернуть (линия)', command=self.apply_rotate_line).pack(side=tk.LEFT, padx=6)
+
+        # Отражение
+        trf4 = ttk.Frame(controls)
+        trf4.pack(side=tk.TOP, fill=tk.X, pady=4)
+        ttk.Label(trf4, text='Отражение: плоскость').pack(side=tk.LEFT)
+        self.refl_plane_var = tk.StringVar(value='xy')
+        self.refl_plane = ttk.Combobox(trf4, textvariable=self.refl_plane_var, values=['xy','yz','xz'], state='readonly', width=6)
+        self.refl_plane.pack(side=tk.LEFT, padx=(6,10))
+        ttk.Button(trf4, text='Отразить', command=self.apply_reflect).pack(side=tk.LEFT, padx=6)
+
+        self.canvas = tk.Canvas(root, bg='white', width=800, height=600)
+        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.canvas.bind('<Configure>', lambda e: self.redraw())
+
+        self.redraw()
+
+    def get_poly(self) -> Polyhedron:
+        return self.model
+
+    def rebuild_model(self):
+        self.model = make_poly(self.poly_var.get())
+        self.redraw()
+
+    def _parse_float(self, widget, default=0.0):
+        try:
+            return float(widget.get())
+        except Exception:
+            return default
+
+    def apply_translate(self):
+        dx = self._parse_float(self.dx_entry, 0.0)
+        dy = self._parse_float(self.dy_entry, 0.0)
+        dz = self._parse_float(self.dz_entry, 0.0)
+        self.model.translate(dx, dy, dz)
+        self.redraw()
+
+    def apply_rotate(self):
+        axis = (self.rot_axis_var.get() or 'x').lower()
+        angle = self._parse_float(self.angle_entry, 0.0)
+        # Поворот вокруг оси, проходящей через начало координат
+        if axis == 'x':
+            self.model.rotate_x(angle)
+        elif axis == 'y':
+            self.model.rotate_y(angle)
+        else:
+            self.model.rotate_z(angle)
+        self.redraw()
+
+    def apply_rotate_center(self):
+        """Явное вращение вокруг прямой через центр модели, параллельной выбранной оси."""
+        axis = (self.rot_axis_var.get() or 'x').lower()
+        angle = self._parse_float(self.angle_entry, 0.0)
+        self.model.rotate_around_axis_through_center(axis, angle)
+        self.redraw()
+
+    def apply_scale(self):
+        sx = self._parse_float(self.sx_entry, 1.0)
+        sy = self._parse_float(self.sy_entry, 1.0)
+        sz = self._parse_float(self.sz_entry, 1.0)
+        # Анизотропный масштаб вокруг начала координат
+        self.model.scale(sx, sy, sz)
+        self.redraw()
+
+    def apply_scale_center(self):
+        # Равномерный масштаб вокруг центра модели (одно число)
+        s = self._parse_float(self.s_uniform_entry, 1.0)
+        self.model.scale_about_center(s)
+        self.redraw()
+
+    def apply_reflect(self):
+        plane = (self.refl_plane_var.get() or 'xy').lower()
+        if plane not in ('xy','yz','xz'):
+            plane = 'xy'
+        self.model.reflect(plane)
+        self.redraw()
+
+    def apply_rotate_line(self):
+        # Чтение точек p1, p2 и угла
+        x1 = self._parse_float(self.p1x_entry, 0.0)
+        y1 = self._parse_float(self.p1y_entry, 0.0)
+        z1 = self._parse_float(self.p1z_entry, 0.0)
+        x2 = self._parse_float(self.p2x_entry, 0.0)
+        y2 = self._parse_float(self.p2y_entry, 1.0)
+        z2 = self._parse_float(self.p2z_entry, 0.0)
+        angle = self._parse_float(self.angle_line_entry, 0.0)
+        p1 = (x1, y1, z1)
+        p2 = (x2, y2, z2)
+        # Проверка на нулевую ось
+        if np.linalg.norm(np.asarray(p2, float) - np.asarray(p1, float)) < 1e-12:
+            # Ничего не делаем, если ось нулевая
+            return
+        self.model.rotate_around_line(p1, p2, angle)
+        self.redraw()
+
+    def redraw(self):
+        self.canvas.delete('all')
+        W = self.canvas.winfo_width()
+        H = self.canvas.winfo_height()
+        if W < 10 or H < 10:
+            return
+
+        P = self.get_poly()
+        mode = self.proj_var.get()
+        x, y, edges = project_points(P, mode)
+        # Фиксированный небольшой размер фигур
+        Xs, Ys = to_pixels(x, y, W, H, scale=120.0)
+
+        # Рисуем рёбра
+        for a, b in edges:
+            self.canvas.create_line(float(Xs[a]), float(Ys[a]), float(Xs[b]), float(Ys[b]), fill='#1f77b4')
+
 
 if __name__ == '__main__':
-    demo()
+    root = tk.Tk()
+    app = App(root)
+    root.mainloop()
